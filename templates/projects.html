@@ -1,0 +1,14 @@
+<html>
+<head>
+    <title>{{ workspace.name }} - Overview of projects</title>
+</head>
+<body>
+    <h1>Asana exporter</h1>
+    <h2>{{ workspace.name }} - Projects:</h2>
+    <ul>
+    {% for prj in projects %}
+        <li><a href="./{{ prj.path()[1] }}/index.html">{{ prj.name }}</li>
+    {% endfor %}
+    </ul>
+</body>
+</html>

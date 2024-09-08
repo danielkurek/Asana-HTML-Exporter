@@ -1,0 +1,16 @@
+asana==5.0.10
+certifi==2024.8.30
+charset-normalizer==3.3.2
+humanize==4.10.0
+idna==3.8
+Jinja2==3.1.4
+markdown-it-py==3.0.0
+MarkupSafe==2.1.5
+mdurl==0.1.2
+Pygments==2.18.0
+python-dateutil==2.9.0.post0
+python-dotenv==1.0.1
+requests==2.32.3
+six==1.16.0
+tqdm==4.66.5
+urllib3==2.2.2

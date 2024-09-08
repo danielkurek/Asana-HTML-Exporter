@@ -1,0 +1,14 @@
+<html>
+<head>
+    <title>Overview of workspaces</title>
+</head>
+<body>
+    <h1>Asana exporter</h1>
+    <h2>Exported Workspaces:</h2>
+    <ul>
+    {% for ws in workspaces %}
+        <li><a href="./{{ ws.path()[1] }}/index.html">{{ ws.name }}</li>
+    {% endfor %}
+    </ul>
+</body>
+</html>
