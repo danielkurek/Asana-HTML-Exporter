@@ -3,7 +3,7 @@ from asana.rest import ApiException
 from pprint import pprint
 import os
 from dotenv import load_dotenv
-from typing import Self
+from typing import Self, Type
 import json
 from pathlib import Path
 from slugify import slugify
@@ -11,24 +11,31 @@ import requests
 import humanize
 from tqdm import tqdm
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+import logging
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+default_base_path = Path("out/")
+
 class SavableHierEntity:
-    base_path = "out/"
-    def __init__(self, name: str, parent: Self, raw_data:dict = None):
+    def __init__(self, gid: str, name: str, parent: Self, raw_data:dict = None):
+        self.gid = gid
         self.name = name
         self.parent = parent
         self.raw_data = raw_data
     
-    def path(self) -> (Path, str):
+    def path(self, base_path=default_base_path) -> (Path, str):
         obj = self.parent
         obj_path = []
         while obj is not None and isinstance(obj, SavableHierEntity):
             obj_path.append(obj)
             obj = obj.parent
         obj_path.reverse()
-        path = Path(self.base_path)
+        path = base_path
+        if isinstance(base_path, str):
+            path = Path(base_path)
         for o in obj_path:
             path = path / slugify(str(o.name))
         return path, slugify(str(self.name))
@@ -37,27 +44,38 @@ class SavableHierEntity:
         path, filename = self.path()
         if not path.exists():
             path.mkdir(parents=True)
-        with open(path / (filename + ".json"), mode="w") as f:
-            json.dump(self.raw_data, f, indent=2)
+        for fname in [filename, slugify(filename), str(self.gid)]:
+            try:
+                with open(path / (fname + ".json"), mode="w") as f:
+                    json.dump(self.raw_data, f, indent=2)
+            except (OSError,FileNotFoundError):
+                logger.warn(f"{self} save_raw: \"{fname}\" is not a valid filename")
+            else:
+                break
 
 class Attachment(SavableHierEntity):
-    def __init__(self, name: str, download_url: str, created_at: str, size: int, parent: 'Task' = None, raw_data: dict = None):
+    save_dir = "attachments"
+    def __init__(self, gid: str, name: str, download_url: str, created_at: str, size: int, resource_subtype: str, parent: 'Task' = None, raw_data: dict = None):
         self.download_url = download_url
         self.created_at = created_at
         self.size = size
-        super().__init__(name, parent, raw_data)
+        self.resource_subtype = resource_subtype
+        super().__init__(gid, name, parent, raw_data)
     
     def from_data(data: dict, parent = None):
-        return Attachment(data["name"], data["download_url"], data["created_at"], data["size"], parent=parent, raw_data=data)
+        return Attachment(data["gid"], data["name"], data["download_url"], data["created_at"], data.get("size"), data["resource_subtype"], parent=parent, raw_data=data)
     
-    def path(self) -> (Path, str):
-        path, filename = super().path()
-        path = path / "attachments"
+    def path(self, base_path=default_base_path) -> (Path, str):
+        path, filename = super().path(base_path=base_path)
+        path = path / self.save_dir
         return path, str(self.name)
     
     def save(self):
         if self.download_url is None:
-            raise Exception("Download URL of an attachment is not specified")
+            if self.resource_subtype == "asana":
+                raise Exception("Download URL of an attachment is not specified")
+            logger.warning(f"{self} no download url - skipping download")
+            return
         if self.name is None:
             raise Exception("Name of an attachment is not specified")
         path, filename = self.path()
@@ -76,36 +94,35 @@ class Attachment(SavableHierEntity):
 
 # Story is a comment on task or an update message
 class Story(SavableHierEntity):
+    save_dir = "stories"
     # TODO: how are represented attachments within comments
     def __init__(self, gid: str, story_type: str, likes: list, text: str, parent: Self = None, raw_data: dict = None):
-        self.gid = gid
         self.story_type = story_type
         self.likes = likes
         self.text = text
-        super().__init__("story_"+str(gid), parent, raw_data)
+        super().__init__(gid, "story_"+str(gid), parent, raw_data)
     
     @staticmethod
     def from_data(data: dict, parent = None):
         return Story(data["gid"], data["type"], data.get("likes"), data["html_text"], parent=parent, raw_data=data)
     
-    def path(self) -> (Path, str):
-        path, filename = super().path()
-        path = path / "stories"
+    def path(self, base_path=default_base_path) -> (Path, str):
+        path, filename = super().path(base_path=base_path)
+        path = path / self.save_dir
         return path, filename
 
 class Task(SavableHierEntity):
     def __init__(self, gid: str, name: str, due_at: str, due_on: str, followers: list, notes: str, num_subtasks: int, tags: list, parent: Self | 'Project' = None, raw_data: dict = None):
-        self.gid = gid
         self.due_at = due_at
         self.due_on = due_on
         self.followers = followers
         self.notes = notes
         self.num_subtasks = num_subtasks
-        self.subtasks = None
+        self.subtasks = []
         self.tags = tags
-        self.stories = None
-        self.attachments = None
-        super().__init__(name, parent, raw_data)
+        self.stories = []
+        self.attachments = []
+        super().__init__(gid, name, parent, raw_data)
     
     def __repr__(self):
         return f"Task(\n\t{self.gid=},\n\t{self.name=},\n\t{self.due_at=},\n\t{self.due_on=},\n\t{self.followers=},\n\t{self.notes=},\n\t{self.num_subtasks=},\n\t{self.subtasks=},\n\t{self.tags=},\n\t{len(self.stories)=}\n\t)"
@@ -113,14 +130,31 @@ class Task(SavableHierEntity):
     def from_data(data: dict, parent = None):
         return Task(data["gid"], data["name"], data["due_at"], data["due_on"], data["followers"], data["html_notes"], data["num_subtasks"], data["tags"], parent=parent, raw_data=data)
     
-    def get_all(self):
-        self.get_stories()
-        self.get_attachments()
-        subtasks = self.get_subtasks()
+    def get_all(self, save_raw: bool = False):
+        logger.info(f"{self} getting stories")
+        self.get_stories(save_raw=save_raw)
+        logger.debug(f"{self} {self.stories=}")
+        logger.info(f"{self} getting attachments")
+        self.get_attachments(save_raw=save_raw)
+        logger.debug(f"{self} {self.attachments=}")
+        logger.info(f"{self} getting subtasks")
+        subtasks = self.get_subtasks(save_raw=save_raw)
+        logger.debug(f"{self} {self.subtasks=}")
         for sub in subtasks:
-            sub.get_all()
+            sub.get_all(save_raw=save_raw)
+    
+    def save_raw_rec(self, download_attachments = True):
+        self.save_raw()
+        for tsk in self.subtasks:
+            tsk.save_raw_rec()
+        for story in self.stories:
+            story.save_raw_rec()
+        for atch in self.attachments:
+            atch.save_raw_rec()
+            if download_attachments:
+                atch.save()
 
-    def get_stories(self) -> list[Story]:
+    def get_stories(self, save_raw: bool = False) -> list[Story]:
         if AsanaExporter.api_client is None:
             raise Exception("No asana api client defined")
         # create an instance of the API class
@@ -135,13 +169,17 @@ class Task(SavableHierEntity):
             # Get stories from a task
             api_response = stories_api_instance.get_stories_for_task(self.gid, opts)
             for data in api_response:
-                stories.append(Story.from_data(data, parent=self))
+                logger.debug(f"{self} story-data={data}")
+                story = Story.from_data(data, parent=self)
+                stories.append(story)
+                if save_raw:
+                    story.save_raw()
         except ApiException as e:
             print("Exception when calling StoriesApi->get_stories_for_task: %s\n" % e)
         self.stories = stories
         return stories
     
-    def get_attachments(self) -> list[Attachment]:
+    def get_attachments(self, save_raw: bool = False) -> list[Attachment]:
         if AsanaExporter.api_client is None:
             raise Exception("No asana api client defined")
         # create an instance of the API class
@@ -156,19 +194,23 @@ class Task(SavableHierEntity):
             # Get attachments from an object
             api_response = attachments_api_instance.get_attachments_for_object(self.gid, opts)
             for data in api_response:
-                attachments.append(Attachment.from_data(data, parent=self))
+                logger.debug(f"{self} attachment-data={data}")
+                atch = Attachment.from_data(data, parent=self)
+                attachments.append(atch)
+                if save_raw:
+                    atch.save_raw()
+                    atch.save()
         except ApiException as e:
             print("Exception when calling AttachmentsApi->get_attachments_for_object: %s\n" % e)
         self.attachments = attachments
         return self.attachments
     
-    def get_subtasks(self) -> list[Self]:
+    def get_subtasks(self, save_raw: bool = False) -> list[Self]:
         if AsanaExporter.api_client is None:
             raise Exception("No asana api client defined")
         # create an instance of the API class
         tasks_api_instance = asana.TasksApi(AsanaExporter.api_client)
         opts = {
-            # 'completed_since': "2012-02-22T02:06:58.158Z", # str | Only return tasks that are either incomplete or that have been completed since this time. Accepts a date-time string or the keyword *now*. 
             'limit': 50, # int | Results per page. The number of objects to return per page. The value must be between 1 and 100.
             # 'offset': "eyJ0eXAiOJiKV1iQLCJhbGciOiJIUzI1NiJ9", # str | Offset token. An offset to the next page returned by the API. A pagination request will return an offset token, which can be used as an input parameter to the next request. If an offset is not passed in, the API will return the first page of results. *Note: You can only pass in an offset that was returned to you via a previously paginated request.*
             'opt_fields': "actual_time_minutes,approval_status,assignee,assignee.name,assignee_section,assignee_section.name,assignee_status,completed,completed_at,completed_by,completed_by.name,created_at,created_by,custom_fields,custom_fields.asana_created_field,custom_fields.created_by,custom_fields.created_by.name,custom_fields.currency_code,custom_fields.custom_label,custom_fields.custom_label_position,custom_fields.date_value,custom_fields.date_value.date,custom_fields.date_value.date_time,custom_fields.description,custom_fields.display_value,custom_fields.enabled,custom_fields.enum_options,custom_fields.enum_options.color,custom_fields.enum_options.enabled,custom_fields.enum_options.name,custom_fields.enum_value,custom_fields.enum_value.color,custom_fields.enum_value.enabled,custom_fields.enum_value.name,custom_fields.format,custom_fields.has_notifications_enabled,custom_fields.id_prefix,custom_fields.is_formula_field,custom_fields.is_global_to_workspace,custom_fields.is_value_read_only,custom_fields.multi_enum_values,custom_fields.multi_enum_values.color,custom_fields.multi_enum_values.enabled,custom_fields.multi_enum_values.name,custom_fields.name,custom_fields.number_value,custom_fields.people_value,custom_fields.people_value.name,custom_fields.precision,custom_fields.representation_type,custom_fields.resource_subtype,custom_fields.text_value,custom_fields.type,dependencies,dependents,due_at,due_on,external,external.data,followers,followers.name,hearted,hearts,hearts.user,hearts.user.name,html_notes,is_rendered_as_separator,liked,likes,likes.user,likes.user.name,memberships,memberships.project,memberships.project.name,memberships.section,memberships.section.name,modified_at,name,notes,num_hearts,num_likes,num_subtasks,offset,parent,parent.created_by,parent.name,parent.resource_subtype,path,permalink_url,projects,projects.name,resource_subtype,start_at,start_on,tags,tags.name,uri,workspace,workspace.name", # list[str] | This endpoint returns a compact resource, which excludes some properties by default. To include those optional properties, set this query parameter to a comma-separated list of the properties you wish to include.
@@ -176,21 +218,46 @@ class Task(SavableHierEntity):
         subtasks = []
         try:
             # Get tasks from a project
-            api_response = tasks_api_instance.get_tasks_for_project(self.gid, opts)
+            api_response = tasks_api_instance.get_subtasks_for_task(self.gid, opts)
             for data in api_response:
-                subtasks.append(Task.from_data(data, parent=self))
+                logger.debug(f"{self} subtask-data={data}")
+                tsk = Task.from_data(data, parent=self)
+                subtasks.append(tsk)
+                if save_raw:
+                    tsk.save_raw
         except ApiException as e:
-            print("Exception when calling TasksApi->get_tasks_for_project: %s\n" % e)
+            print("Exception when calling TasksApi->get_subtasks_for_task: %s\n" % e)
         self.subtasks = subtasks
         return self.subtasks
+    
+    def load_from_raw(self, base_path=default_base_path):
+        path, name = self.path(base_path=base_path)
+        task_path = path / name
+        subtask_files = task_path.glob("*.json")
+        for subtask_file in subtask_files:
+            with open(subtask_file) as f:
+                data = json.load(f)
+                self.subtasks.append(Task.from_data(data, parent=self))
+                self.subtasks[-1].load_from_raw(base_path=base_path)
+        stories_path = task_path / Story.save_dir
+        story_files = stories_path.glob("*.json")
+        for story_file in story_files:
+            with open(story_file) as f:
+                data = json.load(f)
+                self.stories.append(Story.from_data(data, parent=self))
+        attachments_path = task_path / Attachment.save_dir
+        atch_files = attachments_path.glob("*.json")
+        for atch_file in atch_files:
+            with open(atch_file) as f:
+                data = json.load(f)
+                self.attachments.append(Attachment.from_data(data, parent=self))
 
 class Project(SavableHierEntity):
     def __init__(self, gid: str, name: str, color: str, modified_at: str, parent: 'Workspace' = None, raw_data: dict = None):
-        self.gid = gid
         self.color = color
         self.modified_at = modified_at
-        self.tasks = None
-        super().__init__(name, parent, raw_data)
+        self.tasks = []
+        super().__init__(gid, name, parent, raw_data)
     
     def __repr__(self):
         return f"Project(\n\t{self.gid=},\n\t{self.name=},\n\t{self.color=},\n\t{self.modified_at=}\n\t)"
@@ -199,12 +266,19 @@ class Project(SavableHierEntity):
     def from_data(data: dict, parent = None):
         return Project(data["gid"], data["name"], data["color"], data["modified_at"], parent=parent, raw_data=data)
     
-    def get_all(self):
-        tasks = self.get_tasks()
+    def get_all(self, save_raw: bool = False):
+        logger.info(f"{self} getting tasks")
+        tasks = self.get_tasks(save_raw=save_raw)
+        logger.debug(f"{self} {self.tasks=}")
         for tsk in tasks:
-            tsk.get_all()
+            tsk.get_all(save_raw=save_raw)
     
-    def get_tasks(self):
+    def save_raw_rec(self):
+        self.save_raw()
+        for tsk in self.tasks:
+            tsk.save_raw_rec()
+    
+    def get_tasks(self, save_raw: bool = False):
         if AsanaExporter.api_client is None:
             raise Exception("No asana api client defined")
         # create an instance of the API class
@@ -220,29 +294,49 @@ class Project(SavableHierEntity):
             # Get tasks from a project
             api_response = tasks_api_instance.get_tasks_for_project(self.gid, opts)
             for data in api_response:
-                tasks.append(Task.from_data(data, parent=self))
+                logger.debug(f"{self} task-data={data}")
+                tsk = Task.from_data(data, parent=self)
+                tasks.append(tsk)
+                if save_raw:
+                    tsk.save_raw()
         except ApiException as e:
             print("Exception when calling TasksApi->get_tasks_for_project: %s\n" % e)
         self.tasks = tasks
         return self.tasks
+    
+    def load_from_raw(self, base_path=default_base_path):
+        path, name = self.path(base_path=base_path)
+        tasks_path = path / name
+        task_files = tasks_path.glob("*.json")
+        for tsk_file in task_files:
+            with open(tsk_file) as f:
+                data = json.load(f)
+                self.tasks.append(Task.from_data(data, parent=self))
+                self.tasks[-1].load_from_raw(base_path=base_path)
 
 class Workspace(SavableHierEntity):
     def __init__(self, gid: str, name: str, raw_data: dict = None):
-        self.gid = gid
         self.raw_data = raw_data
         self.projects = []
-        super().__init__(name, None, raw_data)
+        super().__init__(gid, name, None, raw_data)
     
     @staticmethod
     def from_data(data: dict):
         return Workspace(data['gid'], data['name'], raw_data=data)
     
-    def get_all(self):
-        projects = self.get_projects()
+    def get_all(self, save_raw: bool = False):
+        logger.info(f"{self} getting projects")
+        projects = self.get_projects(save_raw=save_raw)
+        logger.debug(f"{self} {self.projects=}")
         for prj in projects:
-            prj.get_all()
+            prj.get_all(save_raw=save_raw)
     
-    def get_projects(self) -> list[Project]:
+    def save_raw_rec(self):
+        self.save_raw()
+        for prj in self.projects:
+            prj.save_raw_rec()
+    
+    def get_projects(self, save_raw: bool = False) -> list[Project]:
         if AsanaExporter.api_client is None:
             raise Exception("No asana api client defined")
         # create an instance of the API class
@@ -251,14 +345,18 @@ class Workspace(SavableHierEntity):
             'limit': 50, # int | Results per page. The number of objects to return per page. The value must be between 1 and 100.
             # 'offset': "eyJ0eXAiOJiKV1iQLCJhbGciOiJIUzI1NiJ9", # str | Offset token. An offset to the next page returned by the API. A pagination request will return an offset token, which can be used as an input parameter to the next request. If an offset is not passed in, the API will return the first page of results. *Note: You can only pass in an offset that was returned to you via a previously paginated request.*
             # 'archived': False, # bool | Only return projects whose `archived` field takes on the value of this parameter.
-            'opt_fields': "archived,color,created_at,default_access_level,default_view,due_date,due_on,followers,followers.name,html_notes,icon,members,members.name,modified_at,name,notes,offset,owner,permalink_url,privacy_setting,project_brief,public,team,team.name,workspace,workspace.name", # list[str] | This endpoint returns a compact resource, which excludes some properties by default. To include those optional properties, set this query parameter to a comma-separated list of the properties you wish to include.
+            'opt_fields': "archived,color,completed,completed_at,completed_by,completed_by.name,created_at,created_from_template,created_from_template.name,current_status,current_status.author,current_status.author.name,current_status.color,current_status.created_at,current_status.created_by,current_status.created_by.name,current_status.html_text,current_status.modified_at,current_status.text,current_status.title,current_status_update,current_status_update.resource_subtype,current_status_update.title,custom_field_settings,custom_field_settings.custom_field,custom_field_settings.custom_field.asana_created_field,custom_field_settings.custom_field.created_by,custom_field_settings.custom_field.created_by.name,custom_field_settings.custom_field.currency_code,custom_field_settings.custom_field.custom_label,custom_field_settings.custom_field.custom_label_position,custom_field_settings.custom_field.date_value,custom_field_settings.custom_field.date_value.date,custom_field_settings.custom_field.date_value.date_time,custom_field_settings.custom_field.description,custom_field_settings.custom_field.display_value,custom_field_settings.custom_field.enabled,custom_field_settings.custom_field.enum_options,custom_field_settings.custom_field.enum_options.color,custom_field_settings.custom_field.enum_options.enabled,custom_field_settings.custom_field.enum_options.name,custom_field_settings.custom_field.enum_value,custom_field_settings.custom_field.enum_value.color,custom_field_settings.custom_field.enum_value.enabled,custom_field_settings.custom_field.enum_value.name,custom_field_settings.custom_field.format,custom_field_settings.custom_field.has_notifications_enabled,custom_field_settings.custom_field.id_prefix,custom_field_settings.custom_field.is_formula_field,custom_field_settings.custom_field.is_global_to_workspace,custom_field_settings.custom_field.is_value_read_only,custom_field_settings.custom_field.multi_enum_values,custom_field_settings.custom_field.multi_enum_values.color,custom_field_settings.custom_field.multi_enum_values.enabled,custom_field_settings.custom_field.multi_enum_values.name,custom_field_settings.custom_field.name,custom_field_settings.custom_field.number_value,custom_field_settings.custom_field.people_value,custom_field_settings.custom_field.people_value.name,custom_field_settings.custom_field.precision,custom_field_settings.custom_field.representation_type,custom_field_settings.custom_field.resource_subtype,custom_field_settings.custom_field.text_value,custom_field_settings.custom_field.type,custom_field_settings.is_important,custom_field_settings.parent,custom_field_settings.parent.name,custom_field_settings.project,custom_field_settings.project.name,custom_fields,custom_fields.date_value,custom_fields.date_value.date,custom_fields.date_value.date_time,custom_fields.display_value,custom_fields.enabled,custom_fields.enum_options,custom_fields.enum_options.color,custom_fields.enum_options.enabled,custom_fields.enum_options.name,custom_fields.enum_value,custom_fields.enum_value.color,custom_fields.enum_value.enabled,custom_fields.enum_value.name,custom_fields.id_prefix,custom_fields.is_formula_field,custom_fields.multi_enum_values,custom_fields.multi_enum_values.color,custom_fields.multi_enum_values.enabled,custom_fields.multi_enum_values.name,custom_fields.name,custom_fields.number_value,custom_fields.representation_type,custom_fields.resource_subtype,custom_fields.text_value,custom_fields.type,default_access_level,default_view,due_date,due_on,followers,followers.name,html_notes,icon,members,members.name,minimum_access_level_for_customization,minimum_access_level_for_sharing,modified_at,name,notes,offset,owner,path,permalink_url,privacy_setting,project_brief,public,start_on,team,team.name,uri,workspace,workspace.name", # list[str] | This endpoint returns a compact resource, which excludes some properties by default. To include those optional properties, set this query parameter to a comma-separated list of the properties you wish to include.
         }
         projects = []
         try:
             # Get all projects in a workspace
             api_response = projects_api_instance.get_projects_for_workspace(self.gid, opts)
             for data in api_response:
-                projects.append(Project.from_data(data, parent=self))
+                logger.debug(f"{self} project-data={data}")
+                prj = Project.from_data(data, parent=self)
+                projects.append(prj)
+                if save_raw:
+                    prj.save_raw()
         except ApiException as e:
             print("Exception when calling ProjectsApi->get_projects_for_workspace: %s\n" % e)
         self.projects = projects
@@ -266,6 +364,16 @@ class Workspace(SavableHierEntity):
     
     def __repr__(self):
         return f"Workspace({self.gid=}, {self.name=})"
+    
+    def load_from_raw(self, base_path=default_base_path):
+        path, name = self.path(base_path=base_path)
+        projects_path = path / name
+        project_files = projects_path.glob("*.json")
+        for prj_file in project_files:
+            with open(prj_file) as f:
+                data = json.load(f)
+                self.projects.append(Project.from_data(data, parent=self))
+                self.projects[-1].load_from_raw(base_path=base_path)
     
     @staticmethod
     def get_workspaces() -> list[Self]:
@@ -275,13 +383,14 @@ class Workspace(SavableHierEntity):
         opts = {
             'limit': 50, # int | Results per page. The number of objects to return per page. The value must be between 1 and 100.
             # 'offset': "eyJ0eXAiOJiKV1iQLCJhbGciOiJIUzI1NiJ9", # str | Offset token. An offset to the next page returned by the API. A pagination request will return an offset token, which can be used as an input parameter to the next request. If an offset is not passed in, the API will return the first page of results. *Note: You can only pass in an offset that was returned to you via a previously paginated request.*
-            'opt_fields': "name,offset,path,uri", # list[str] | This endpoint returns a compact resource, which excludes some properties by default. To include those optional properties, set this query parameter to a comma-separated list of the properties you wish to include.
+            'opt_fields': "email_domains,is_organization,name,offset,path,uri", # list[str] | This endpoint returns a compact resource, which excludes some properties by default. To include those optional properties, set this query parameter to a comma-separated list of the properties you wish to include.
         }
         workspaces = []
         try:
             # Get multiple workspaces
             api_response = workspaces_api_instance.get_workspaces(opts)
             for data in api_response:
+                logger.debug(f"workspace-data={data}")
                 workspaces.append(Workspace.from_data(data))
         except ApiException as e:
             print("Exception when calling WorkspacesApi->get_workspaces: %s\n" % e)
@@ -290,29 +399,76 @@ class Workspace(SavableHierEntity):
 class AsanaExporter:
     api_client = None
     def __init__(self):
-        pass
+        self.workspaces = []
     def exportAll(self):
         workspaces = Workspace.get_workspaces()
         print(workspaces)
-        for ws in workspaces[0:1]:
+        for ws in workspaces:
             print(f"=====================\n{ws}\n=====================")
-            ws.get_all()
+            ws.get_all(save_raw=True)
+    def load_from_raw(self, base_path: Path = default_base_path):
+        # Raw files are stored alongside the folder which they represent
+        # Folder structure:
+        # - Workspace/
+        #   - Project/
+        #       - Task/
+        #           - (/Subtask/...)
+        #           - stories/
+        #           - attachments/
+        ws_files = base_path.glob("*.json")
+        for ws_file in ws_files:
+            with open(ws_file) as f:
+                data = json.load(f)
+                self.workspaces.append(Workspace.from_data(data))
+                self.workspaces[-1].load_from_raw(base_path=base_path)
 
 
 configuration = asana.Configuration()
 configuration.access_token = os.getenv("ASANA_TOKEN")
 AsanaExporter.api_client = asana.ApiClient(configuration)
 
-env = Environment(
-    loader=FileSystemLoader("templates"),
-    autoescape=select_autoescape()
-)
+# env = Environment(
+#     loader=FileSystemLoader("templates"),
+#     autoescape=select_autoescape()
+# )
 
-template = env.get_template("index.html")
+# template = env.get_template("index.html")
+
+# # Create a file handler to write logs to a file
+# file_handler = logging.FileHandler('app.log')
+# file_handler.setLevel(logging.DEBUG)
+
+# # Create a stream handler to print logs to the console
+# console_handler = logging.StreamHandler()
+# console_handler.setLevel(logging.INFO)  # You can set the desired log level for console output
+
+# # Add the handlers to the logger
+# logger.addHandler(file_handler)
+# logger.addHandler(console_handler)
+
+logging.basicConfig(filename='app.log', level=logging.DEBUG)
+
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+console.setFormatter(logging.Formatter(logging.BASIC_FORMAT))
+
+logging.getLogger('').addHandler(console)
+
 exporter = AsanaExporter()
+exporter.exportAll()
+# exporter.load_from_raw()
+# for ws in exporter.workspaces:
+#     print(ws)
+#     print(ws.projects)
+#     for prj in ws.projects:
+#         print(prj.tasks)
+#         for tsk in prj.tasks:
+#             print(tsk.attachments)
+#             print(tsk.stories)
+#             print(tsk.subtasks)
 # exporter.exportAll()
-ws = Workspace.get_workspaces()
-print(template.render(workspaces=ws))
+# ws = Workspace.get_workspaces()
+# print(template.render(workspaces=ws))
 # for w in ws[:1]:
 #     w.save_raw()
 #     projects = w.get_projects()
