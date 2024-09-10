@@ -5,10 +5,14 @@
 <body>
     <h1>Asana exporter</h1>
     <h2>Exported Workspaces:</h2>
+    {% if data.workspaces|length > 0 %}
     <ul>
-    {% for ws in workspaces %}
+    {% for ws in data.workspaces %}
         <li><a href="./{{ ws.path()[1] }}/index.html">{{ ws.name }}</li>
     {% endfor %}
     </ul>
+    {% else %}
+    <b>No workspaces exported</b>
+    {% endif %}
 </body>
 </html>

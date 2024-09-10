@@ -1,0 +1,40 @@
+<html>
+<head>
+    <title>{{ data.name }} - Overview of tasks</title>
+</head>
+<body>
+    <h1>Asana exporter</h1>
+    <h2>{{ data.name }}</h2>
+    <div>
+        <h3>Notes</h3>
+        <div>{{ data.notes | remove_bodytag | safe }}</div>
+        <h3>Attachments</h3>
+        <div>
+            <ul>
+            {% for att in data.attachments %}
+                <li><a href="./attachments/{{ att.name }}">{{ att.name }}</a>({{ att.size|filesizeformat(binary=True) if att.size else "Unknown size"}}, {{ att.created_at }})</li>
+            {% endfor %}
+            </ul>
+        </div>
+    </div>
+    <div class="stories">
+    <h3>Activity</h3>
+    {% for story in data.stories %}
+        {% if story.story_type == "comment" %}
+            <div class="story comment">
+                <span class="time">({{ story.created_at }})</span>
+                <span class="user"><b>{{ story.username }} ({{story.likes | length if story.likes else 0}} 👍):</b></span>
+                <span>{{ story.text | remove_bodytag | safe }}</span>
+            </div>
+        {% else %}
+            <div class="story">
+                <span class="time">({{ story.created_at }})</span>
+                <span class="text">{{ story.text | remove_bodytag | safe }}</span>
+            </div>
+        {% endif %}
+    {% else %}
+        <b>No activity or comments</b>
+    {% endfor %}
+    </div>
+</body>
+</html>

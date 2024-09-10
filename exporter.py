@@ -12,6 +12,8 @@ import humanize
 from tqdm import tqdm
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import logging
+import re
+import locale
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,20 @@ class SavableHierEntity:
             try:
                 with open(path / (fname + ".json"), mode="w") as f:
                     json.dump(self.raw_data, f, indent=2)
+            except (OSError,FileNotFoundError):
+                logger.warn(f"{self} save_raw: \"{fname}\" is not a valid filename")
+            else:
+                break
+    
+    def export_html(self, template, path = None):
+        if path is None:
+            path, filename = self.path()
+        if not path.exists():
+            path.mkdir(parents=True)
+        for fname in [filename, slugify(filename)]:
+            try:
+                with open(path / fname / "index.html", mode="w") as f:
+                    f.write(template.render(data=self))
             except (OSError,FileNotFoundError):
                 logger.warn(f"{self} save_raw: \"{fname}\" is not a valid filename")
             else:
@@ -96,15 +112,21 @@ class Attachment(SavableHierEntity):
 class Story(SavableHierEntity):
     save_dir = "stories"
     # TODO: how are represented attachments within comments
-    def __init__(self, gid: str, story_type: str, likes: list, text: str, parent: Self = None, raw_data: dict = None):
+    def __init__(self, gid: str, story_type: str, likes: list, text: str, created_at: str, username: str = None, parent: Self = None, raw_data: dict = None):
         self.story_type = story_type
         self.likes = likes
         self.text = text
+        self.created_at = created_at
+        self.username = username
         super().__init__(gid, "story_"+str(gid), parent, raw_data)
     
     @staticmethod
     def from_data(data: dict, parent = None):
-        return Story(data["gid"], data["type"], data.get("likes"), data["html_text"], parent=parent, raw_data=data)
+        username = None
+        if data["type"] == "comment":
+            username = data["created_by"]["name"]
+        
+        return Story(data["gid"], data["type"], data.get("likes"), data["html_text"], data["created_at"], username=username, parent=parent, raw_data=data)
     
     def path(self, base_path=default_base_path) -> (Path, str):
         path, filename = super().path(base_path=base_path)
@@ -122,6 +144,7 @@ class Task(SavableHierEntity):
         self.tags = tags
         self.stories = []
         self.attachments = []
+        self.name_xfrm = locale.strxfrm(name)
         super().__init__(gid, name, parent, raw_data)
     
     def __repr__(self):
@@ -153,6 +176,9 @@ class Task(SavableHierEntity):
             atch.save_raw_rec()
             if download_attachments:
                 atch.save()
+    
+    def export(self, templates):
+        self.export_html(template=templates[self.__class__.__name__])
 
     def get_stories(self, save_raw: bool = False) -> list[Story]:
         if AsanaExporter.api_client is None:
@@ -278,6 +304,11 @@ class Project(SavableHierEntity):
         for tsk in self.tasks:
             tsk.save_raw_rec()
     
+    def export(self, templates):
+        self.export_html(template=templates[self.__class__.__name__])
+        for tsk in self.tasks:
+            tsk.export(templates)
+    
     def get_tasks(self, save_raw: bool = False):
         if AsanaExporter.api_client is None:
             raise Exception("No asana api client defined")
@@ -335,6 +366,11 @@ class Workspace(SavableHierEntity):
         self.save_raw()
         for prj in self.projects:
             prj.save_raw_rec()
+    
+    def export(self, templates):
+        self.export_html(template=templates[self.__class__.__name__])
+        for prj in self.projects:
+            prj.export(templates)
     
     def get_projects(self, save_raw: bool = False) -> list[Project]:
         if AsanaExporter.api_client is None:
@@ -400,12 +436,20 @@ class AsanaExporter:
     api_client = None
     def __init__(self):
         self.workspaces = []
-    def exportAll(self):
-        workspaces = Workspace.get_workspaces()
-        print(workspaces)
-        for ws in workspaces:
-            print(f"=====================\n{ws}\n=====================")
+    def getAll(self):
+        self.workspaces = Workspace.get_workspaces()
+        for ws in self.workspaces:
+            ws.save_raw()
             ws.get_all(save_raw=True)
+    def exportAll(self, templates):
+        self.export_html(templates["index"])
+        for ws in self.workspaces:
+            ws.export(templates)
+    def export_html(self, template, path = default_base_path):
+        if not path.exists():
+            path.mkdir(parents=True)
+        with open(path / "index.html", mode="w") as f:
+            f.write(template.render(data=self))
     def load_from_raw(self, base_path: Path = default_base_path):
         # Raw files are stored alongside the folder which they represent
         # Folder structure:
@@ -419,32 +463,29 @@ class AsanaExporter:
         for ws_file in ws_files:
             with open(ws_file) as f:
                 data = json.load(f)
-                self.workspaces.append(Workspace.from_data(data))
-                self.workspaces[-1].load_from_raw(base_path=base_path)
+                ws = Workspace.from_data(data)
+                self.workspaces.append(ws)
+                ws.load_from_raw(base_path=base_path)
+
+
+def remove_bodytag(value):
+    value = re.sub(r'^\s*<body>', '', value)
+    value = re.sub(r'</body>\s*$', '', value)
+    return value
 
 
 configuration = asana.Configuration()
 configuration.access_token = os.getenv("ASANA_TOKEN")
 AsanaExporter.api_client = asana.ApiClient(configuration)
 
-# env = Environment(
-#     loader=FileSystemLoader("templates"),
-#     autoescape=select_autoescape()
-# )
+env = Environment(
+    loader=FileSystemLoader("templates"),
+    autoescape=select_autoescape()
+)
+
+env.filters["remove_bodytag"] = remove_bodytag
 
 # template = env.get_template("index.html")
-
-# # Create a file handler to write logs to a file
-# file_handler = logging.FileHandler('app.log')
-# file_handler.setLevel(logging.DEBUG)
-
-# # Create a stream handler to print logs to the console
-# console_handler = logging.StreamHandler()
-# console_handler.setLevel(logging.INFO)  # You can set the desired log level for console output
-
-# # Add the handlers to the logger
-# logger.addHandler(file_handler)
-# logger.addHandler(console_handler)
 
 logging.basicConfig(filename='app.log', level=logging.DEBUG)
 
@@ -454,33 +495,16 @@ console.setFormatter(logging.Formatter(logging.BASIC_FORMAT))
 
 logging.getLogger('').addHandler(console)
 
+templates = {
+    "index": env.get_template("index.html"),
+    Workspace.__name__: env.get_template("workspace.html"),
+    Project.__name__: env.get_template("project.html"),
+    Task.__name__: env.get_template("task.html"),
+}
+
+locale.setlocale(locale.LC_ALL, "cs_CZ.UTF-8") # change this to your country locale
+
 exporter = AsanaExporter()
-exporter.exportAll()
-# exporter.load_from_raw()
-# for ws in exporter.workspaces:
-#     print(ws)
-#     print(ws.projects)
-#     for prj in ws.projects:
-#         print(prj.tasks)
-#         for tsk in prj.tasks:
-#             print(tsk.attachments)
-#             print(tsk.stories)
-#             print(tsk.subtasks)
-# exporter.exportAll()
-# ws = Workspace.get_workspaces()
-# print(template.render(workspaces=ws))
-# for w in ws[:1]:
-#     w.save_raw()
-#     projects = w.get_projects()
-#     for prj in projects[:1]:
-#         prj.save_raw()
-#         tasks = prj.get_tasks()
-#         for tsk in tasks[:10]:
-#             tsk.save_raw()
-#             stories = tsk.get_stories()
-#             for s in stories:
-#                 s.save_raw()
-#             atts = tsk.get_attachments()
-#             for att in atts:
-#                 att.save_raw()
-#                 att.save()
+# exporter.getAll()
+exporter.load_from_raw()
+exporter.exportAll(templates)
