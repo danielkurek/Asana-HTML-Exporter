@@ -250,7 +250,7 @@ class Task(SavableHierEntity):
                 tsk = Task.from_data(data, parent=self)
                 subtasks.append(tsk)
                 if save_raw:
-                    tsk.save_raw
+                    tsk.save_raw()
         except ApiException as e:
             print("Exception when calling TasksApi->get_subtasks_for_task: %s\n" % e)
         self.subtasks = subtasks
