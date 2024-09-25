@@ -6,6 +6,27 @@
     <h1>Asana exporter</h1>
     <h2>{{ data.name }}</h2>
     <div class="task-details">
+        <div class="memberships">
+            <h3>Projects</h3>
+            {% if data.memberships|length > 0 %}
+            <ul>
+                {% for membership in data.memberships %}
+                <li>
+                    {% if "project" in membership %}
+                    <span class="project">{{ membership["project"].name}}</span>
+                    {% endif %}
+                    > 
+                    {% if "section" in membership %}
+                    <span class="section">{{ membership["section"].name}}</span>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <b>No project contains this task</b>
+            {% endif %}
+        </div>
+        </div>
         <div class="notes">
             <h3>Notes</h3>
             <div>{{ data.notes | remove_bodytag | safe }}</div>

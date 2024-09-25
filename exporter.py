@@ -134,7 +134,7 @@ class Story(SavableHierEntity):
         return path, filename
 
 class Task(SavableHierEntity):
-    def __init__(self, gid: str, name: str, due_at: str, due_on: str, followers: list, notes: str, num_subtasks: int, tags: list, parent: Self | 'Project' = None, raw_data: dict = None):
+    def __init__(self, gid: str, name: str, due_at: str, due_on: str, followers: list, notes: str, num_subtasks: int, tags: list, memberships: list, parent: Self | 'Project' = None, raw_data: dict = None):
         self.due_at = due_at
         self.due_on = due_on
         self.followers = followers
@@ -144,14 +144,15 @@ class Task(SavableHierEntity):
         self.tags = tags
         self.stories = []
         self.attachments = []
+        self.memberships = memberships
         self.name_xfrm = locale.strxfrm(name)
         super().__init__(gid, name, parent, raw_data)
     
     def __repr__(self):
-        return f"Task(\n\t{self.gid=},\n\t{self.name=},\n\t{self.due_at=},\n\t{self.due_on=},\n\t{self.followers=},\n\t{self.notes=},\n\t{self.num_subtasks=},\n\t{self.subtasks=},\n\t{self.tags=},\n\t{len(self.stories)=}\n\t)"
+        return f"Task(\n\t{self.gid=},\n\t{self.name=},\n\t{self.due_at=},\n\t{self.due_on=},\n\t{self.followers=},\n\t{self.notes=},\n\t{self.num_subtasks=},\n\t{self.subtasks=},\n\t{self.tags=},\n\t{self.memberships=},\n\t{len(self.stories)=}\n\t)"
     
     def from_data(data: dict, parent = None):
-        return Task(data["gid"], data["name"], data["due_at"], data["due_on"], data["followers"], data["html_notes"], data["num_subtasks"], data["tags"], parent=parent, raw_data=data)
+        return Task(data["gid"], data["name"], data["due_at"], data["due_on"], data["followers"], data["html_notes"], data["num_subtasks"], data["tags"], data["memberships"], parent=parent, raw_data=data)
     
     def get_all(self, save_raw: bool = False):
         logger.info(f"{self} getting stories")
