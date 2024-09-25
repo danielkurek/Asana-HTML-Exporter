@@ -5,9 +5,23 @@
 <body>
     <h1>Asana exporter</h1>
     <h2>{{ data.name }}</h2>
-    <div>
-        <h3>Notes</h3>
-        <div>{{ data.notes | remove_bodytag | safe }}</div>
+    <div class="task-details">
+        <div class="notes">
+            <h3>Notes</h3>
+            <div>{{ data.notes | remove_bodytag | safe }}</div>
+        </div>
+        <div class="subtasks">
+            <h3>Subtasks</h3>
+            {% if data.subtasks|length > 0 %}
+            <ul>
+            {% for task in data.subtasks|sort(attribute="name_xfrm") %}
+                <li><a href="./{{ task.path()[1] }}/index.html">{{ task.name }}</a></li>
+            {% endfor %}
+            </ul>
+            {% else %}
+            <b>No subtasks</b>
+            {% endif %}
+        </div>
         <h3>Attachments</h3>
         <div>
             <ul>
