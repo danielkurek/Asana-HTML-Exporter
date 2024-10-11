@@ -8,7 +8,7 @@
     {% if data.workspaces|length > 0 %}
     <ul>
     {% for ws in data.workspaces %}
-        <li><a href="./{{ ws.path()[1] }}/index.html">{{ ws.name }}</li>
+        <li><a href="./{{ ws.filename() }}/index.html">{{ ws.name }}</li>
     {% endfor %}
     </ul>
     {% else %}

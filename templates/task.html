@@ -36,7 +36,7 @@
             {% if data.subtasks|length > 0 %}
             <ul>
             {% for task in data.subtasks|sort(attribute="name_xfrm") %}
-                <li><a href="./{{ task.path()[1] }}/index.html">{{ task.name }}</a></li>
+                <li><a href="./{{ task.filename() }}/index.html">{{ task.name }}</a></li>
             {% endfor %}
             </ul>
             {% else %}

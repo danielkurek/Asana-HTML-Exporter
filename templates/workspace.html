@@ -8,7 +8,7 @@
     {% if data.projects|length > 0 %}
     <ul>
     {% for prj in data.projects %}
-        <li><a href="./{{ prj.path()[1] }}/index.html">{{ prj.name }}</li>
+        <li><a href="./{{ prj.filename() }}/index.html">{{ prj.name }}</li>
     {% endfor %}
     </ul>
     {% else %}

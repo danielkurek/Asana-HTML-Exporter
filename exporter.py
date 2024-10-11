@@ -27,8 +27,10 @@ class SavableHierEntity:
         self.name = name
         self.parent = parent
         self.raw_data = raw_data
+    def filename(self, extension: str = ""):
+        return slugify(str(self.name) + extension)
     
-    def path(self, base_path=default_base_path) -> (Path, str):
+    def path(self, base_path=default_base_path) -> Path:
         obj = self.parent
         obj_path = []
         while obj is not None and isinstance(obj, SavableHierEntity):
@@ -36,38 +38,34 @@ class SavableHierEntity:
             obj = obj.parent
         obj_path.reverse()
         path = base_path
-        if isinstance(base_path, str):
-            path = Path(base_path)
+        if not isinstance(base_path, Path):
+            path = Path(sanitize_filepath(base_path))
         for o in obj_path:
-            path = path / slugify(str(o.name))
-        return path, slugify(str(self.name))
-            
-    def save_raw(self):
-        path, filename = self.path()
-        if not path.exists():
-            path.mkdir(parents=True)
-        for fname in [filename, slugify(filename), str(self.gid)]:
-            try:
-                with open(path / (fname + ".json"), mode="w") as f:
-                    json.dump(self.raw_data, f, indent=2)
-            except (OSError,FileNotFoundError):
-                logger.warn(f"{self} save_raw: \"{fname}\" is not a valid filename")
-            else:
-                break
+            path = path / o.filename()
+        return path
     
-    def export_html(self, template, path = None):
-        if path is None:
-            path, filename = self.path()
-        if not path.exists():
-            path.mkdir(parents=True)
-        for fname in [filename, slugify(filename)]:
-            try:
-                with open(path / fname / "index.html", mode="w") as f:
-                    f.write(template.render(data=self))
-            except (OSError,FileNotFoundError):
-                logger.warn(f"{self} save_raw: \"{fname}\" is not a valid filename")
-            else:
-                break
+    def get_save_path(self, extension="", base_path=default_base_path):
+        return self.path() / self.filename(extension=extension)
+    
+    def save_raw(self):
+        path = self.get_save_path(".json")
+        if not path.parent.exists():
+            path.parent.mkdir(parents=True)
+        try:
+            with open(path, mode="w") as f:
+                json.dump(self.raw_data, f, indent=2)
+        except (OSError,FileNotFoundError):
+            logger.warn(f"{self} save_raw: \"{path}\" is not a valid path")
+    
+    def export_html(self, template):
+        save_path = self.get_save_path() / "index.html"
+        if not save_path.parent.exists():
+            save_path.parent.mkdir(parents=True)
+        try:
+            with open(save_path, mode="w") as f:
+                f.write(template.render(data=self))
+        except (OSError,FileNotFoundError):
+            logger.warn(f"{self} save_raw: \"{save_path}\" is not a valid path")
 
 class Attachment(SavableHierEntity):
     save_dir = "attachments"
@@ -81,10 +79,8 @@ class Attachment(SavableHierEntity):
     def from_data(data: dict, parent = None):
         return Attachment(data["gid"], data["name"], data["download_url"], data["created_at"], data.get("size"), data["resource_subtype"], parent=parent, raw_data=data)
     
-    def path(self, base_path=default_base_path) -> (Path, str):
-        path, filename = super().path(base_path=base_path)
-        path = path / self.save_dir
-        return path, str(self.name)
+    def path(self, base_path=default_base_path) -> Path:
+        return super().path() / self.save_dir
     
     def save(self):
         if self.download_url is None:
@@ -94,16 +90,16 @@ class Attachment(SavableHierEntity):
             return
         if self.name is None:
             raise Exception("Name of an attachment is not specified")
-        path, filename = self.path()
+        save_path = self.get_save_path()
         resp = requests.get(self.download_url, stream=True)
         size = int(resp.headers.get('content-length', 0))
         block_size = 1024
         size_str = ""
         if self.size is not None:
             size_str = f" ({humanize.naturalsize(self.size, binary=True)})"
-        print(f"Downloading {filename}{size_str}")
+        print(f"Downloading {self.name}{size_str}")
         with tqdm(total=size, unit="B", unit_scale=True) as progress_bar:
-            with open(path / filename, mode="wb") as f:
+            with open(save_path, mode="wb") as f:
                 for data in resp.iter_content(block_size):
                     progress_bar.update(len(data))
                     f.write(data)
@@ -129,9 +125,7 @@ class Story(SavableHierEntity):
         return Story(data["gid"], data["type"], data.get("likes"), data["html_text"], data["created_at"], username=username, parent=parent, raw_data=data)
     
     def path(self, base_path=default_base_path) -> (Path, str):
-        path, filename = super().path(base_path=base_path)
-        path = path / self.save_dir
-        return path, filename
+        return super().path() / self.save_dir
 
 class Task(SavableHierEntity):
     def __init__(self, gid: str, name: str, due_at: str, due_on: str, followers: list, notes: str, num_subtasks: int, tags: list, memberships: list, parent: Self | 'Project' = None, raw_data: dict = None):
@@ -258,7 +252,7 @@ class Task(SavableHierEntity):
         return self.subtasks
     
     def load_from_raw(self, base_path=default_base_path):
-        path, name = self.path(base_path=base_path)
+        path, name = self.path(base_path=base_path), self.filename()
         task_path = path / name
         subtask_files = task_path.glob("*.json")
         for subtask_file in subtask_files:
@@ -337,7 +331,7 @@ class Project(SavableHierEntity):
         return self.tasks
     
     def load_from_raw(self, base_path=default_base_path):
-        path, name = self.path(base_path=base_path)
+        path, name = self.path(base_path=base_path), self.filename()
         tasks_path = path / name
         task_files = tasks_path.glob("*.json")
         for tsk_file in task_files:
@@ -403,7 +397,7 @@ class Workspace(SavableHierEntity):
         return f"Workspace({self.gid=}, {self.name=})"
     
     def load_from_raw(self, base_path=default_base_path):
-        path, name = self.path(base_path=base_path)
+        path, name = self.path(base_path=base_path), self.filename()
         projects_path = path / name
         project_files = projects_path.glob("*.json")
         for prj_file in project_files:
