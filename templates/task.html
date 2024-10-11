@@ -30,7 +30,11 @@
         </div>
         <div class="notes">
             <h3>Notes</h3>
-            <div>{{ data.notes | remove_bodytag | safe }}</div>
+            {% if data.notes | remove_bodytag | trim | length == 0%}
+            <b>No notes</b>
+            {% else %}
+            <div class="notes-text">{{ data.notes | remove_bodytag | safe }}</div>
+            {% endif %}
         </div>
         <div class="subtasks">
             <h3>Subtasks</h3>
@@ -48,7 +52,11 @@
         <div>
             <ul>
             {% for att in data.attachments %}
-                <li><a href="./attachments/{{ att.name }}">{{ att.name }}</a>({{ att.size|filesizeformat(binary=True) if att.size else "Unknown size"}}, {{ att.created_at }})</li>
+                {% if att.raw_data.download_url %}
+                    <li><a href="./attachments/{{ att.name }}">{{ att.name }}</a>({{ att.size|filesizeformat(binary=True) if att.size else "Unknown size"}}, {{ att.created_at }})</li>
+                {% else %}
+                    <li><a href="{{ att.raw_data.view_url }}">{{ att.name }}</a>(External, {{ att.created_at }})</li>
+                {% endif %}
             {% endfor %}
             </ul>
         </div>
