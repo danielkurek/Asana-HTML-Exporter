@@ -1,0 +1,8 @@
+<nav>
+    {% for nav in data | navigation_relpaths | reverse %}
+        <a href="{{ nav.path }}">{{ nav.obj.name }}</a>
+        {% if not loop.last %}
+        <span>&gt;</span>
+        {% endif %}
+    {% endfor %}
+</nav>

@@ -463,6 +463,19 @@ class AsanaExporter:
                 ws.load_from_raw(base_path=base_path)
 
 
+def navigation_relpaths(base_obj: SavableHierEntity):
+    navigation = []
+    hier_obj = base_obj.parent
+    path = Path("..")
+    while hier_obj != None:
+        navigation.append({ "obj": hier_obj, "path": str(path / "index.html") })
+        path = path / ".."
+        hier_obj = hier_obj.parent
+    # Add overview link
+    # (this is kind of a hack, instead of object we pass dictionary - it acts the same way in jinja)
+    navigation.append({ "obj": {"name": "Overview"}, "path": str(path / "index.html") })
+    return navigation
+
 def remove_bodytag(value):
     value = re.sub(r'^\s*<body>', '', value)
     value = re.sub(r'</body>\s*$', '', value)
@@ -479,6 +492,7 @@ env = Environment(
 )
 
 env.filters["remove_bodytag"] = remove_bodytag
+env.filters["navigation_relpaths"] = navigation_relpaths
 
 # template = env.get_template("index.html")
 

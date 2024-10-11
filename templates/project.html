@@ -4,6 +4,7 @@
 </head>
 <body>
     <h1>Asana exporter</h1>
+    {% include 'navigation.html' with context %}
     <h2>{{ data.name }} - Tasks:</h2>
     {% if data.tasks|length > 0 %}
     <ul>
