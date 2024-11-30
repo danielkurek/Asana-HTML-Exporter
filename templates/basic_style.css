@@ -1,0 +1,28 @@
+.story h1 {
+    font-size: 1.5em;
+}
+
+.story h2 {
+    font-size: 1.2em;
+}
+
+.story h3 {
+    font-size: 1.1em;
+}
+
+
+.stories {
+    background-color: #d7d7e6;
+    padding: 10px;
+}
+
+.story {
+    margin: 10px 0px 10px 0px;
+    padding: 10px;
+}
+
+.story.comment {
+    background-color: #ffffff;
+    border: 1px solid black;
+    border-radius: 10px;
+}
